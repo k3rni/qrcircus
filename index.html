@@ -4,19 +4,56 @@
     <title>canvas</title>
     <style type="text/css">
       canvas {
-        width: 200px;
-        height: 200px;
+        width: 300px;
+        height: 300px;
+        position: relative;
       }
     </style>
-    <script type="text/javascript" src="zero.js"></script>
+    <script type="text/javascript" src="jsqrcode/grid.js"></script>
+    <script type="text/javascript" src="jsqrcode/version.js"></script>
+    <script type="text/javascript" src="jsqrcode/detector.js"></script>
+    <script type="text/javascript" src="jsqrcode/formatinf.js"></script>
+    <script type="text/javascript" src="jsqrcode/errorlevel.js"></script>
+    <script type="text/javascript" src="jsqrcode/bitmat.js"></script>
+    <script type="text/javascript" src="jsqrcode/datablock.js"></script>
+    <script type="text/javascript" src="jsqrcode/bmparser.js"></script>
+    <script type="text/javascript" src="jsqrcode/datamask.js"></script>
+    <script type="text/javascript" src="jsqrcode/rsdecoder.js"></script>
+    <script type="text/javascript" src="jsqrcode/gf256poly.js"></script>
+    <script type="text/javascript" src="jsqrcode/gf256.js"></script>
+    <script type="text/javascript" src="jsqrcode/decoder.js"></script>
+    <script type="text/javascript" src="jsqrcode/qrcode.js"></script>
+    <script type="text/javascript" src="jsqrcode/findpat.js"></script>
+    <script type="text/javascript" src="jsqrcode/alignpat.js"></script>
+    <script type="text/javascript" src="jsqrcode/databr.js"></script>
   </head>
   <body>
-    <label for="ver">Rozmiar kodu</label>
+    <h2>Info</h2>
+    <section class="manual">
+      Click or use cursor keys to move on the canvas. Certain areas, such as position indicators, may be
+      inaccessible, and for good reason.<br/>
+      Edit 2 bits at a time. Use <b>0</b> to reset, <b>1</b> to set the upper bit, <b>2</b> for the lower bit, <b>3</b> to set both.<br/>
+      If you overwrite the alignment indicator (small box) or timesync pattern (dotted lines), the code probably won't scan.
+    </section>
+    <label for="ver">Code size (rows or cols): </label>
     <input type="number" min="21" max="41" step="4" id="ver" value="25">
+    <button type="button" id="erase">Erase</button>
+    <button type="button" id="example">Load sample</button>
     <br/>
     <canvas id="canvas"></canvas>
+    <h2>QRCode contents</h2>
+    <section id="content">
+    </section>
   </body>
   <script type="text/javascript">
+    var module_color = 'rgb(0, 0, 0)',
+        space_color = 'rgb(255, 255, 255)',
+        cursor_colors = [module_color, space_color];
+
+    function $(selector) {
+      return document.querySelector(selector);
+    };
+
     function get_row(data, num, size) {
       // data to Arraybuffer, musimy zrobić abv
       var rowlen = Math.ceil(size / 8),
@@ -40,15 +77,14 @@
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      ctx.strokeStyle = 'rgb(255, 0, 0)';
       for (var i = 0; i < rows; i++) {
         var pixels = get_row(data, i, rows);
         for (var j = 0; j < rows; j++) 
           if (pixels[j] > 0) {
-            ctx.fillStyle = 'rgb(0, 255, 0)';
+            ctx.fillStyle = module_color;
             ctx.fillRect(j * w, i * h, (j + 1) * w, (i + 1) * h);
           } else {
-            ctx.fillStyle = 'rgb(255, 0, 0)';
+            ctx.fillStyle = space_color;
             ctx.fillRect(j * w, i * h, (j + 1) * w, (i + 1) * h);
           }
       }
@@ -56,16 +92,10 @@
 
     function draw_cursor(canvas, rows, cr, cc, blink) {
       var ctx = canvas.getContext('2d'),
-          w = canvas.width / rows, h = canvas.height / rows;
+          w = canvas.getBoundingClientRect().width / rows, h = canvas.getBoundingClientRect().height / rows;
 
-      if (blink)
-        ctx.strokeStyle = 'rgb(0, 0, 0)';
-      else
-        ctx.strokeStyle = 'rgb(255, 255, 255)';
-
-      ctx.beginPath();
-      ctx.rect(cc * w, cr * h, w, h*2);
-      ctx.stroke();
+      ctx.strokeStyle = cursor_colors[blink ? 1 : 0];
+      ctx.strokeRect(cc * w, cr * h, w, h*2);
     }
 
     function write_bytes(data, rowsize, rownum, start, len, bytes) {
@@ -149,6 +179,7 @@
     }
 
     function advance_cursor(row, col, size) {
+      // TODO: jeśli nie da się r+2 (jestem na dole), przesuń o 1
       var c = col, r = row;
       while (r < size) {
         while (c < size) {
@@ -162,81 +193,106 @@
       return [row, col];
     }
 
-    $(function() {
-      var code, canvas = $('canvas')[0];
-      var cr = 0, cc = 8, qrsize = 25;
-      var blink = false;
-      function refresh() {
-        if (!code) return;
-        raw_draw(canvas, code, qrsize);
-        draw_cursor(canvas, qrsize, cr, cc, blink);
-      };
-      $('canvas').attr('tabindex', 0);
-      $('#ver').on('change', function(event) {
-        var val = $(this).val(),
-            size = Number(val);
-        qrsize = size;
-        code = emptyqr(size);
-      });
-      // NOTE: autorepeat?
-      $('canvas').on('keydown', function(event) {
-        event.preventDefault();
-        var newcr = cr, newcc = cc;
-        switch (event.keyIdentifier) {
-          case "Left":
-            newcc -= 1;
-            break;
-          case "Right":
-            newcc += 1;
-            break;
-          case "Down":
-            newcr += 1;
-            break;
-          case "Up":
-            newcr -= 1;
-            break;
-          default:
-            switch(event.keyCode) {
-              case 48: case 96:
-                // zero
-                write_bits(code, cr, cc, qrsize, 0);
-                var _p = advance_cursor(cr, cc, qrsize); newcr = _p[0]; newcc = _p[1];
-                break;
-
-              case 49: case 97:
-                // 1
-                write_bits(code, cr, cc, qrsize, 1);
-                var _p = advance_cursor(cr, cc, qrsize); newcr = _p[0]; newcc = _p[1];
-                break;
-
-              case 50: case 98:
-                // 2
-                write_bits(code, cr, cc, qrsize, 2);
-                var _p = advance_cursor(cr, cc, qrsize); newcr = _p[0]; newcc = _p[1];
-                break;
-
-              case 51: case 99:
-                // 3
-                write_bits(code, cr, cc, qrsize, 3);
-                var _p = advance_cursor(cr, cc, qrsize); newcr = _p[0]; newcc = _p[1];
-                break;
-            }
-        }
-        if (coords_valid(newcr, newcc, qrsize)) {
-          cr = newcr; cc = newcc; refresh();
-        }
-      });
-      $('canvas').on('click', function(event) {
-        var h = $(canvas).height() / qrsize, w = $(canvas).width() / qrsize, 
-          r = Math.floor(event.offsetY / h), c = Math.floor(event.offsetX / w);
-          if (coords_valid(r, c, qrsize)) {
-            cr = r; cc = c; refresh();
-          }
-      });
-      setInterval(function() {
-        refresh();
-        blink = !blink;
-      }, 500);
+    var cr = 0, cc = 8, qrsize = Number($('#ver')['value']);
+    var code = emptyqr(qrsize), canvas = $('canvas');
+    var blink = false;
+    function refresh() {
+      if (!code) return;
+      raw_draw(canvas, code, qrsize);
+      draw_cursor(canvas, qrsize, cr, cc, blink);
+    };
+    $('canvas').tabIndex= 0;
+    $('canvas').width = 300; $('canvas').height = 300;
+    $('#ver').addEventListener('change', function(event) {
+      var val = this['value'];
+      size = Number(val);
+      qrsize = size;
+      code = emptyqr(size);
     });
+    $('#erase').addEventListener('click', function(event) {
+      code = emptyqr(qrsize);
+    });
+    // NOTE: autorepeat?
+    $('canvas').addEventListener('keydown', function(event) {
+      event.preventDefault();
+      var newcr = cr, newcc = cc,
+          keyname = event.keyIdentifier == undefined ? event.key : event.keyIdentifier;
+      switch (keyname) {
+        case "Left":
+          newcc -= 1;
+        break;
+        case "Right":
+          newcc += 1;
+        break;
+        case "Down":
+          newcr += 1;
+        break;
+        case "Up":
+          newcr -= 1;
+        break;
+        default:
+          switch(event.keyCode) {
+          case 48: case 96:
+            // zero
+            write_bits(code, cr, cc, qrsize, 0);
+            var _p = advance_cursor(cr, cc, qrsize); newcr = _p[0]; newcc = _p[1];
+            break;
+
+          case 49: case 97:
+            // 1
+            write_bits(code, cr, cc, qrsize, 1);
+            var _p = advance_cursor(cr, cc, qrsize); newcr = _p[0]; newcc = _p[1];
+            break;
+
+          case 50: case 98:
+            // 2
+            write_bits(code, cr, cc, qrsize, 2);
+            var _p = advance_cursor(cr, cc, qrsize); newcr = _p[0]; newcc = _p[1];
+            break;
+
+          case 51: case 99:
+            // 3
+            write_bits(code, cr, cc, qrsize, 3);
+            var _p = advance_cursor(cr, cc, qrsize); newcr = _p[0]; newcc = _p[1];
+            break;
+        }
+      }
+      if (coords_valid(newcr, newcc, qrsize)) {
+        cr = newcr; cc = newcc; refresh();
+      }
+    });
+    $('canvas').addEventListener('click', function(event) {
+      var h = canvas.getBoundingClientRect().height / qrsize, w = canvas.getBoundingClientRect().width / qrsize, 
+      ox = event.offsetX == undefined ? event.layerX : event.offsetX,
+      oy = event.offsetY == undefined ? event.layerY : event.offsetY,
+      r = Math.floor(oy / h), c = Math.floor(ox / w);
+      if (coords_valid(r, c, qrsize)) {
+        cr = r; cc = c; refresh();
+      }
+    });
+    $('#example').addEventListener('click', function(event) {
+      qrsize = 21;
+      code = new Int8Array([-2, 51, -8, -126, -118, 8, -70, -118, -24, -70, -118, -24, -70, -70, -24, -126, -94,
+                           8, -2, -85, -8, 0, 0, 0, 39, -11, -16, 20, -6, 72, -37, 42, 40, 112, -108, -56, -29,
+                           60, 8, 0, -51, 16, -2, -3, -56, -126, -53, 0, -70, 37, -120, -70, 30, 0, -70, -58,
+                           56, -126, 106, -128, -2, 50, 104]);
+      refresh();
+    });
+    setInterval(function() {
+      refresh();
+      blink = !blink;
+    }, 500);
+    setInterval(function() {
+      qrcode.width = canvas.width;
+      qrcode.height = canvas.height;
+      var ctx = canvas.getContext('2d');
+      qrcode.imagedata = ctx.getImageData(0, 0, qrcode.width, qrcode.height);
+      try {
+        var result = qrcode.process(ctx);
+        $('#content').innerHTML = result;
+      } catch (e) {
+        $('#content').innerHTML = '(decoding error)';
+      }
+    }, 2000);
   </script>
 </html>
