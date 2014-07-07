@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>canvas</title>
+    <style type="text/css">
+      canvas {
+        width: 200px;
+        height: 200px;
+      }
+    </style>
+    <script type="text/javascript" src="zero.js"></script>
+  </head>
+  <body>
+    <canvas id="canvas"></canvas>
+  </body>
+  <script type="text/javascript">
+    function get_row(data, num, size) {
+      // data to Arraybuffer, musimy zrobić abv
+      var rowlen = Math.ceil(size / 8),
+          start = num * rowlen,
+          abv = data.subarray(start, start + rowlen);
+      var result = [], i = 0, t = 0;
+      while (i < size) {
+        var a = abv[t], rest = size - i;
+        for (var k = 0; k < Math.min(8, rest); k++) {
+          result.push(a & 0x80);
+          a = a << 1;
+          if (++i % 8 == 0) t++;
+        }
+      }
+      return result;
+    }
+    function raw_draw(canvas, data, rows) {
+      var ctx = canvas.getContext('2d'),
+          w = canvas.width / rows,
+          h = canvas.height / rows;
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      ctx.strokeStyle = 'rgb(255, 0, 0)';
+      for (var i = 0; i < rows; i++) {
+        var pixels = get_row(data, i, rows);
+        for (var j = 0; j < rows; j++) 
+          if (pixels[j] > 0) {
+            ctx.fillStyle = 'rgb(0, 255, 0)';
+            ctx.fillRect(j * w, i * h, (j + 1) * w, (i + 1) * h);
+          } else {
+            ctx.fillStyle = 'rgb(255, 0, 0)';
+            ctx.fillRect(j * w, i * h, (j + 1) * w, (i + 1) * h);
+          }
+      }
+    };
+
+    function write_bytes(data, rowsize, rownum, start, len, bytes) {
+      // rowsize - długość wiersza, ale już zaokrąglona w górę do 8
+      // rownum - numer wiersza
+      // start i len - miejsce od którego zapisywać bity, długość. oba w BITACH
+      // bytes - array z którego brać kolejne bity
+      var row = data.subarray(rownum * rowsize, (rownum+1) * rowsize);
+      var i = 0, // indeks bitu do wpisania
+          j = 7 - start % 8, // indeks miejsca na wpisanie bitu
+          t = 0, // indeks bajtu ze źródłem bitów
+          d = Math.floor(start / 8); // indeks bajtu docelowego
+      while (i < len) {
+        var rest = len - i;
+        var a = bytes[t];
+        for (var k = 0; k < Math.min(8, rest); k++) {
+          var bit = (a & 0x80) >> 7, // zawsze 1 lub 0
+              mask = 0xff ^ (1 << j); // zgaś j-ty bit, reszta zapalone
+          row[d] = (row[d] & mask) | (bit << j);
+          a = a << 1;
+          if (--j < 0) { d++; j = 7 }
+          if (++i % 8 == 0) t++;
+        }
+      }
+    };
+
+    function write_orientation_block(data, bpr, row, col, shift) {
+      write_bytes(data, bpr, row, col, 8, [0xfe >> shift]); 
+      write_bytes(data, bpr, row+1, col, 8, [0x82 >> shift]); 
+      write_bytes(data, bpr, row+2, col, 8, [0xba >> shift]); 
+      write_bytes(data, bpr, row+3, col, 8, [0xba >> shift]); 
+      write_bytes(data, bpr, row+4, col, 8, [0xba >> shift]);
+      write_bytes(data, bpr, row+5, col, 8, [0x82 >> shift]);
+      write_bytes(data, bpr, row+6, col, 8, [0xfe >> shift]);
+      write_bytes(data, bpr, row+7, col, 8, [0x00 >> shift]);
+    }
+
+    function write_timesync(data, bpr, size) {
+      for (var k = 6; k < size - 7; k += 2) {
+        write_bytes(data, bpr, 6, k, 1, [0x80]);
+        write_bytes(data, bpr, k, 6, 1, [0x80]);
+      }
+    }
+
+    function emptyqr(size) {
+      var bpr = Math.ceil(size / 8),
+          data = new Int8Array(bpr * size);
+      // topleft orientation
+      write_orientation_block(data, bpr, 0, 0, 0);
+      // topright orientation
+      write_orientation_block(data, bpr, 0, size - 8, 1);
+      // bottomleft orientation, za koniec tablicy pisze ale działa
+      write_orientation_block(data, bpr, size-7, 0, 0);
+      // timesync
+      write_timesync(data, bpr, size);
+      return data;
+    }
+
+    $(function() {
+      console.log('dupa');
+      /* var t = new Int8Array(100);
+      for (var i = 0; i < 100; i++) t[i] = 0xaa;
+      t[0] = t[1] = t[2] = 0x0f; t[3] = 0x7f; */
+      var t = emptyqr(35);
+      raw_draw($('canvas')[0], t, 35); 
+    });
+  </script>
+</html>
