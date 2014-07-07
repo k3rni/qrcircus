@@ -11,6 +11,9 @@
     <script type="text/javascript" src="zero.js"></script>
   </head>
   <body>
+    <label for="ver">Rozmiar kodu</label>
+    <input type="number" min="21" max="41" step="4" id="ver" value="25">
+    <br/>
     <canvas id="canvas"></canvas>
   </body>
   <script type="text/javascript">
@@ -49,7 +52,21 @@
             ctx.fillRect(j * w, i * h, (j + 1) * w, (i + 1) * h);
           }
       }
-    };
+    }
+
+    function draw_cursor(canvas, rows, cr, cc, blink) {
+      var ctx = canvas.getContext('2d'),
+          w = canvas.width / rows, h = canvas.height / rows;
+
+      if (blink)
+        ctx.strokeStyle = 'rgb(0, 0, 0)';
+      else
+        ctx.strokeStyle = 'rgb(255, 255, 255)';
+
+      ctx.beginPath();
+      ctx.rect(cc * w, cr * h, w, h*2);
+      ctx.stroke();
+    }
 
     function write_bytes(data, rowsize, rownum, start, len, bytes) {
       // rowsize - długość wiersza, ale już zaokrąglona w górę do 8
@@ -67,7 +84,7 @@
         for (var k = 0; k < Math.min(8, rest); k++) {
           var bit = (a & 0x80) >> 7, // zawsze 1 lub 0
               mask = 0xff ^ (1 << j); // zgaś j-ty bit, reszta zapalone
-          row[d] = (row[d] & mask) | (bit << j);
+          row[d] = (row[d] & mask) | (bit << j); // ustaw jeden konkretny bit
           a = a << 1;
           if (--j < 0) { d++; j = 7 }
           if (++i % 8 == 0) t++;
@@ -76,14 +93,9 @@
     };
 
     function write_orientation_block(data, bpr, row, col, shift) {
-      write_bytes(data, bpr, row, col, 8, [0xfe >> shift]); 
-      write_bytes(data, bpr, row+1, col, 8, [0x82 >> shift]); 
-      write_bytes(data, bpr, row+2, col, 8, [0xba >> shift]); 
-      write_bytes(data, bpr, row+3, col, 8, [0xba >> shift]); 
-      write_bytes(data, bpr, row+4, col, 8, [0xba >> shift]);
-      write_bytes(data, bpr, row+5, col, 8, [0x82 >> shift]);
-      write_bytes(data, bpr, row+6, col, 8, [0xfe >> shift]);
-      write_bytes(data, bpr, row+7, col, 8, [0x00 >> shift]);
+      var block = [0xfe, 0x82, 0xba, 0xba, 0xba, 0x82, 0xfe, 0x00];
+      for (var i = 0; i < 8; i++)
+        write_bytes(data, bpr, row+i, col, 8, [block[i] >> shift]); 
     }
 
     function write_timesync(data, bpr, size) {
@@ -92,28 +104,139 @@
         write_bytes(data, bpr, k, 6, 1, [0x80]);
       }
     }
+    
+    function write_alignment(data, bpr, size) {
+      var v = 1 + Math.floor((size - 21) / 4);
+      // obsługujemy tylko do V6, więc zawsze 1 alignment pat
+      if (v > 6 || v == 1) return false;
+      var center = (14 + v * 2),// taki wzór tylko dla V1 do V6
+          //pos = Math.floor(center + (size - center) / 2),
+          pos = center,
+          pat = [0xf8, 0x88, 0xa8, 0x88, 0xf8];
+      for (var i = 0; i < 5; i++)
+        write_bytes(data, bpr, pos - 2 + i, pos - 2, 5, [pat[i]]);
+    }
 
     function emptyqr(size) {
       var bpr = Math.ceil(size / 8),
           data = new Int8Array(bpr * size);
-      // topleft orientation
       write_orientation_block(data, bpr, 0, 0, 0);
-      // topright orientation
       write_orientation_block(data, bpr, 0, size - 8, 1);
-      // bottomleft orientation, za koniec tablicy pisze ale działa
       write_orientation_block(data, bpr, size-7, 0, 0);
-      // timesync
       write_timesync(data, bpr, size);
+      write_alignment(data, bpr, size);
       return data;
     }
 
+    function write_bits(data, row, col, size, val) {
+      var bpr = Math.ceil(size / 8);
+      // shifty potrzebne bo zapisujemy MSB
+      write_bytes(data, bpr, row, col, 1, [(val & 1) << 7]);
+      write_bytes(data, bpr, row + 1, col, 1, [(val & 2) << 6]);
+    }
+
+    function coords_valid(row, col, size) {
+      if (row < 8 && col < 8)
+        return false;
+      if (row >= size - 8 && col < 8 || row < 8 && col >= size - 8)
+        return false;
+      if (row < 0 || col < 0)
+        return false;
+      if (row >= size - 1 || col >= size)
+        return false;
+      // TODO: wykluczaj też alignment i timesync?
+      return true;
+    }
+
+    function advance_cursor(row, col, size) {
+      var c = col, r = row;
+      while (r < size) {
+        while (c < size) {
+          c += 1
+          if (coords_valid(r, c, size))
+            return [r, c];
+        };
+        r += 2;
+        c = 0;
+      };
+      return [row, col];
+    }
+
     $(function() {
-      console.log('dupa');
-      /* var t = new Int8Array(100);
-      for (var i = 0; i < 100; i++) t[i] = 0xaa;
-      t[0] = t[1] = t[2] = 0x0f; t[3] = 0x7f; */
-      var t = emptyqr(35);
-      raw_draw($('canvas')[0], t, 35); 
+      var code, canvas = $('canvas')[0];
+      var cr = 0, cc = 8, qrsize = 25;
+      var blink = false;
+      function refresh() {
+        if (!code) return;
+        raw_draw(canvas, code, qrsize);
+        draw_cursor(canvas, qrsize, cr, cc, blink);
+      };
+      $('canvas').attr('tabindex', 0);
+      $('#ver').on('change', function(event) {
+        var val = $(this).val(),
+            size = Number(val);
+        qrsize = size;
+        code = emptyqr(size);
+      });
+      // NOTE: autorepeat?
+      $('canvas').on('keydown', function(event) {
+        event.preventDefault();
+        var newcr = cr, newcc = cc;
+        switch (event.keyIdentifier) {
+          case "Left":
+            newcc -= 1;
+            break;
+          case "Right":
+            newcc += 1;
+            break;
+          case "Down":
+            newcr += 1;
+            break;
+          case "Up":
+            newcr -= 1;
+            break;
+          default:
+            switch(event.keyCode) {
+              case 48: case 96:
+                // zero
+                write_bits(code, cr, cc, qrsize, 0);
+                var _p = advance_cursor(cr, cc, qrsize); newcr = _p[0]; newcc = _p[1];
+                break;
+
+              case 49: case 97:
+                // 1
+                write_bits(code, cr, cc, qrsize, 1);
+                var _p = advance_cursor(cr, cc, qrsize); newcr = _p[0]; newcc = _p[1];
+                break;
+
+              case 50: case 98:
+                // 2
+                write_bits(code, cr, cc, qrsize, 2);
+                var _p = advance_cursor(cr, cc, qrsize); newcr = _p[0]; newcc = _p[1];
+                break;
+
+              case 51: case 99:
+                // 3
+                write_bits(code, cr, cc, qrsize, 3);
+                var _p = advance_cursor(cr, cc, qrsize); newcr = _p[0]; newcc = _p[1];
+                break;
+            }
+        }
+        if (coords_valid(newcr, newcc, qrsize)) {
+          cr = newcr; cc = newcc; refresh();
+        }
+      });
+      $('canvas').on('click', function(event) {
+        var h = $(canvas).height() / qrsize, w = $(canvas).width() / qrsize, 
+          r = Math.floor(event.offsetY / h), c = Math.floor(event.offsetX / w);
+          if (coords_valid(r, c, qrsize)) {
+            cr = r; cc = c; refresh();
+          }
+      });
+      setInterval(function() {
+        refresh();
+        blink = !blink;
+      }, 500);
     });
   </script>
 </html>
